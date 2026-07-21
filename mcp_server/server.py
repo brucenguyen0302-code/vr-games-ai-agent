@@ -8,6 +8,14 @@ using stdio transport, allowing AI agents and MCP-compatible clients to query
 live venue data — attractions, pricing, bookings, customer interactions, and
 brand information — directly from the SQLite database.
 
+Tools
+-----
+Venue operations : get_attractions, get_pricing, check_availability,
+                   create_booking, get_upcoming_bookings,
+                   log_customer_interaction
+Content creation : get_brand_guidelines, generate_image,
+                   generate_video_script, moderate_content
+
 Run standalone:
     python mcp_server/server.py
 
@@ -15,20 +23,32 @@ Or via the MCP CLI (from the project root):
     mcp run mcp_server/server.py
 """
 
+import os
+import re
 import sqlite3
+import textwrap
 from pathlib import Path
+
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 # ---------------------------------------------------------------------------
 # Server setup
 # ---------------------------------------------------------------------------
 
+# Load .env from the project root so HF_TOKEN and other secrets are available
+# regardless of the working directory the server is launched from.
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+load_dotenv(PROJECT_ROOT / ".env")
+
 mcp = FastMCP("innoviz-venue")
 
-# Resolve the database path relative to the project root (one level above this
-# file's directory), regardless of the working directory when the server runs.
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+# SQLite database path — also anchored to the project root.
 DB_PATH = PROJECT_ROOT / "data" / "venue.db"
+
+# Image provider: swap to "mock" to always use the Pillow fallback.
+IMAGE_PROVIDER = "huggingface"
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -717,6 +737,487 @@ def log_customer_interaction(
 
     except Exception as e:
         return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Content tools — private helpers
+# ---------------------------------------------------------------------------
+
+def _get_brand(cur: sqlite3.Cursor) -> dict:
+    """Return the brand table as a plain dict {key: value}."""
+    cur.execute("SELECT key, value FROM brand")
+    return {r["key"]: r["value"] for r in cur.fetchall()}
+
+
+def _get_valid_prices(cur: sqlite3.Cursor) -> set[float]:
+    """Return the set of all price_aud values present in the pricing table."""
+    cur.execute("SELECT DISTINCT price_aud FROM pricing")
+    return {round(r[0], 2) for r in cur.fetchall()}
+
+
+def _sanitize_filename(filename: str) -> str:
+    """
+    Reject path-traversal sequences; strip any extension; return a safe stem.
+    Raises ValueError if the name contains / \\ or ..  after stripping.
+    """
+    stem = Path(filename).stem          # drop extension if caller supplied one
+    if re.search(r'[\\/]|\.\.' , stem):
+        raise ValueError(f"Unsafe filename: {filename!r}")
+    # Allow only word chars, hyphens, spaces
+    safe = re.sub(r'[^\w\s-]', '', stem).strip()
+    if not safe:
+        raise ValueError(f"Filename '{filename}' produced an empty stem after sanitisation.")
+    return safe
+
+
+def _generate_image_mock(prompt: str, path: Path) -> dict:
+    """
+    Pillow fallback: 1080×1080 dark canvas with purple/pink gradient border
+    and the prompt wrapped as white text.  Always succeeds.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    W, H, BORDER = 1080, 1080, 16
+    img = Image.new("RGB", (W, H), (18, 10, 30))   # near-black background
+    draw = ImageDraw.Draw(img)
+
+    # Gradient border: purple top-left → pink bottom-right
+    for i in range(BORDER):
+        t = i / BORDER
+        r = int(138 + t * (255 - 138))
+        g = int(43  + t * (0   - 43))
+        b = int(226 + t * (150 - 226))
+        draw.rectangle([i, i, W - 1 - i, H - 1 - i], outline=(r, g, b))
+
+    # Wrapped prompt text
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
+        small = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 22)
+    except OSError:
+        font = ImageFont.load_default()
+        small = font
+
+    lines = textwrap.wrap(prompt, width=38)
+    y = H // 2 - len(lines) * 22
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w_text = bbox[2] - bbox[0]
+        draw.text(((W - w_text) // 2, y), line, font=font, fill=(230, 210, 255))
+        y += 48
+
+    draw.text((40, H - 60), "@thrillmates • Innoviz Crown", font=small, fill=(160, 100, 220))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, format="PNG")
+    return {"provider": "mock_fallback", "bytes": path.stat().st_size}
+
+
+def _generate_image_hf(prompt: str, path: Path) -> dict:
+    """
+    HuggingFace Inference API image generation.
+    Uses FLUX.1-schnell via InferenceClient and saves the PIL image as PNG.
+    Returns {provider, bytes} on success; raises on failure.
+    """
+    from huggingface_hub import InferenceClient
+
+    token = os.environ.get("HF_TOKEN")
+    client = InferenceClient(token=token)
+    img = client.text_to_image(
+        prompt,
+        model="black-forest-labs/FLUX.1-schnell",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, format="PNG")
+    return {"provider": "huggingface", "bytes": path.stat().st_size}
+
+
+# ---------------------------------------------------------------------------
+# Content tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_brand_guidelines() -> dict:
+    """
+    Return the complete brand guidelines for Innoviz Crown.
+
+    This is a read-only tool that agents should consult before drafting any
+    social media copy, captions, scripts, or image prompts to ensure all
+    output is on-brand.
+
+    Returns
+    -------
+    dict with all keys from the brand table plus a 'notes' key that contains
+    actionable reminders for content creators:
+        venue_name, instagram_handle, website, karaoke_brand, visual_style,
+        taglines, audience, notes.
+
+    Key guidelines (also present in 'notes'):
+    - All visuals must follow the neon-arcade, retro-pixel aesthetic with
+      vibrant purple/pink/blue on dark backgrounds.
+    - Captions should be fun, energetic, and draw from the venue taglines.
+    - Every Instagram post must tag @thrillmates.
+    """
+    try:
+        conn = _get_connection()
+        try:
+            brand = _get_brand(conn.cursor())
+            brand["notes"] = (
+                "All visuals must follow the neon-arcade, retro-pixel aesthetic "
+                "(vibrant purple/pink/blue on dark backgrounds). "
+                "Captions should be fun and energetic — draw from the venue taglines. "
+                "Every Instagram post or Story must tag @thrillmates."
+            )
+            return brand
+        finally:
+            conn.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def generate_image(prompt: str, filename: str) -> dict:
+    """
+    Generate a promotional image for the venue using AI image generation.
+
+    The brand visual style ('neon arcade, retro-pixel, vibrant purple/pink/blue
+    on dark backgrounds') is automatically prepended to the prompt so all
+    generated images are on-brand — do NOT include the style manually.
+
+    Parameters
+    ----------
+    prompt : str
+        Describe the image content, e.g. "person wearing VR headset on the
+        VR Slide attraction, mid-air, excited expression" or "birthday party
+        in VYBOX karaoke booth, neon lights, group of friends singing".
+        Keep it to 1–3 sentences. Do not describe the colour scheme or art
+        style — those are prepended automatically.
+    filename : str
+        Base filename for the saved image (no path, no extension needed).
+        Example: "vr_slide_promo" → saved as generated/vr_slide_promo.png.
+        Must not contain path separators (/ or \\ ) or '..'.
+
+    Returns
+    -------
+    On success:
+        path (str)       — absolute path of the saved PNG
+        final_prompt (str) — the full prompt sent to the model
+        provider (str)   — 'huggingface' or 'mock_fallback'
+        bytes (int)      — file size in bytes
+        hf_error (str)   — only present when provider is 'mock_fallback';
+                           contains the original HuggingFace error message
+    On failure:
+        {"error": str}
+    """
+    try:
+        # --- Sanitize filename ---
+        try:
+            safe_stem = _sanitize_filename(filename)
+        except ValueError as e:
+            return {"error": str(e)}
+
+        out_dir = PROJECT_ROOT / "generated"
+        out_path = out_dir / f"{safe_stem}.png"
+
+        # --- Read brand style prefix from DB ---
+        conn = _get_connection()
+        try:
+            brand = _get_brand(conn.cursor())
+        finally:
+            conn.close()
+
+        visual_style = brand.get("visual_style", "neon arcade, vibrant purple/pink/blue on dark backgrounds")
+        final_prompt = f"{visual_style}. {prompt.strip()}"
+
+        # --- Dispatch to provider ---
+        result: dict = {}
+        if IMAGE_PROVIDER == "huggingface":
+            try:
+                result = _generate_image_hf(final_prompt, out_path)
+            except Exception as hf_err:
+                mock_result = _generate_image_mock(final_prompt, out_path)
+                result = {**mock_result, "hf_error": str(hf_err)}
+        else:
+            result = _generate_image_mock(final_prompt, out_path)
+
+        return {
+            "path": str(out_path),
+            "final_prompt": final_prompt,
+            **result,
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def generate_video_script(
+    topic: str,
+    platform: str,
+    duration_seconds: int = 30,
+) -> dict:
+    """
+    Generate a structured video script scaffold for Instagram Reels or TikTok.
+
+    No external API calls are made — the script is built from the venue's brand
+    guidelines and attractions data.  When the topic matches a known attraction
+    (fuzzy/case-insensitive), the script is tailored to that attraction's
+    tagline and description.
+
+    Parameters
+    ----------
+    topic : str
+        What the video is about, e.g. "VR Slide", "birthday karaoke",
+        "360 Flight", "general venue promo".  Partial attraction names work:
+        "slide" will match "VR Slide", "paraglider" will match "Paraglider".
+    platform : str
+        Must be exactly 'instagram_reel' or 'tiktok'.
+    duration_seconds : int
+        Target video length in seconds (default 30).  Shot timings will sum
+        to this value.  Reasonable range: 15–60.
+
+    Returns
+    -------
+    dict with:
+        topic (str)           — resolved attraction name or original topic
+        platform (str)
+        duration_seconds (int)
+        hook (str)            — opening 1-2 second hook line (text overlay / VO)
+        shot_list (list)      — 5–7 dicts: {shot, duration_s, description}
+        caption_draft (str)   — ready-to-post caption with taglines + @thrillmates
+        hashtags (list[str])  — 8–12 hashtags
+        cta (str)             — call-to-action line
+    On failure: {"error": str}
+    """
+    _VALID_PLATFORMS = {"instagram_reel", "tiktok"}
+    try:
+        if platform not in _VALID_PLATFORMS:
+            return {
+                "error": (
+                    f"Invalid platform '{platform}'. "
+                    f"Must be one of: {sorted(_VALID_PLATFORMS)}."
+                )
+            }
+        if duration_seconds < 5:
+            return {"error": "duration_seconds must be at least 5."}
+
+        conn = _get_connection()
+        try:
+            cur = conn.cursor()
+            brand = _get_brand(cur)
+
+            # Try fuzzy-match the topic to an attraction
+            att = _resolve_attraction(cur, topic)
+
+        finally:
+            conn.close()
+
+        venue   = brand.get("venue_name", "Innoviz Crown")
+        handle  = brand.get("instagram_handle", "@thrillmates")
+        taglines_raw = brand.get("taglines", "")
+        tagline_list = [t.strip() for t in taglines_raw.split("|") if t.strip()]
+        audience = brand.get("audience", "everyone")
+
+        # Resolved display name and flavour text
+        if att:
+            display_topic  = att["name"]
+            att_tagline    = att.get("tagline") or (tagline_list[0] if tagline_list else "")
+            att_desc       = att.get("description", "")
+            category       = att["category"]
+        else:
+            display_topic  = topic
+            att_tagline    = tagline_list[0] if tagline_list else ""
+            att_desc       = f"an incredible experience at {venue}"
+            category       = "general"
+
+        # --- Hook ---
+        hook = att_tagline if att_tagline else f"You need to experience {display_topic}!"
+
+        # --- Shot list (5–7 shots, timings sum to duration_seconds) ---
+        remaining = duration_seconds
+
+        def allot(preferred: int) -> int:
+            """Take min(preferred, remaining) seconds, at least 1."""
+            nonlocal remaining
+            t = max(1, min(preferred, remaining))
+            remaining -= t
+            return t
+
+        if category == "vr_ride":
+            raw_shots = [
+                (2,  f"TEXT OVERLAY: '{hook}' — fast zoom on the {display_topic} unit"),
+                (5,  f"Close-up of guest putting on VR headset, reaction of excitement"),
+                (6,  f"POV: inside the VR world — wild visuals from the {display_topic} experience"),
+                (5,  f"Wide shot: motion rig moving / rotating with guest inside"),
+                (5,  f"Guest's face mid-ride — genuine thrill / laughter"),
+                (4,  f"Guest exits, turns to camera, gives thumbs-up or shocked expression"),
+                (3,  f"END CARD: '{venue}' logo, handle {handle}, 'Book now' CTA"),
+            ]
+        elif category == "vr_karaoke":
+            raw_shots = [
+                (2,  f"TEXT OVERLAY: 'Let's get loud!' — neon booth exterior"),
+                (5,  f"Group piling into the {display_topic}, laughing and hyped"),
+                (6,  f"Wide shot inside booth: neon sync lighting reacting to music"),
+                (5,  f"Close-up: microphone held up, crowd singing along"),
+                (5,  f"Reaction shots — someone nailing a high note, group cheering"),
+                (4,  f"Screen: recording playback UI — 'Record & Share' feature"),
+                (3,  f"END CARD: '{venue}' logo, handle {handle}, 'Book your booth' CTA"),
+            ]
+        else:  # general promo
+            raw_shots = [
+                (2,  f"TEXT OVERLAY: '{hook}' — sweeping venue establishing shot"),
+                (5,  f"Montage: guests on VR rides — quick cuts, high energy"),
+                (5,  f"Karaoke booth exterior with neon lights pulsing to music"),
+                (5,  f"Close-ups: excited faces, VR headsets, hands on controllers"),
+                (5,  f"Group selfie moment or celebration inside karaoke booth"),
+                (5,  f"Staff member smiling, welcoming guests at front desk"),
+                (3,  f"END CARD: '{venue}' logo, {handle}, 'Visit us today'"),
+            ]
+
+        # Trim/extend so timings exactly equal duration_seconds
+        shot_list = []
+        for i, (dur, desc) in enumerate(raw_shots):
+            is_last = (i == len(raw_shots) - 1)
+            t = remaining if is_last else allot(dur)
+            if t <= 0:
+                break
+            shot_list.append({"shot": i + 1, "duration_s": t, "description": desc})
+
+        # --- Caption draft ---
+        chosen_tagline = tagline_list[0] if tagline_list else att_tagline
+        if att and att.get("tagline"):
+            chosen_tagline = att["tagline"]
+        caption_draft = (
+            f"{chosen_tagline} \u2728\n\n"
+            f"{att_desc[:120].rstrip()}{'...' if len(att_desc) > 120 else ''}\n\n"
+            f"Find us at {brand.get('website', 'innovizcrown.com.au')} "
+            f"\u2022 Tag a friend who needs this!\n\n"
+            f"{handle}"
+        )
+
+        # --- Hashtags ---
+        base_tags = [
+            "#InnovizCrown", "#Thrillmates", "#VRExperience", "#VRArcade",
+            "#BrisbaneFun", "#AustraliaFun", "#FamilyFun", "#DateNight",
+        ]
+        if category == "vr_ride":
+            base_tags += ["#VRRide", "#ThrillSeekers", "#VRGaming", "#AdventureAwaits"]
+        elif category == "vr_karaoke":
+            base_tags += ["#Karaoke", "#KaraokeNight", "#VYBOX", "#GroupFun"]
+        else:
+            base_tags += ["#NightOut", "#WeekendVibes", "#BucketList", "#MustVisit"]
+        hashtags = base_tags[:12]
+
+        # --- CTA ---
+        cta = (
+            f"Book online at {brand.get('website', 'innovizcrown.com.au')} "
+            f"or DM {handle} to reserve your spot!"
+        )
+
+        return {
+            "topic": display_topic,
+            "platform": platform,
+            "duration_seconds": duration_seconds,
+            "hook": hook,
+            "shot_list": shot_list,
+            "caption_draft": caption_draft,
+            "hashtags": hashtags,
+            "cta": cta,
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def moderate_content(text: str) -> dict:
+    """
+    Rule-based content moderation for social media copy and captions.
+
+    This is a read-only tool that checks text against brand safety and
+    platform compliance rules before posting.  No external API is called.
+
+    Parameters
+    ----------
+    text : str
+        The caption, comment reply, DM draft, or any other text to be checked.
+
+    Rules checked (in order)
+    ------------------------
+    1. Profanity    — flags a small wordlist of explicit terms.
+    2. ALL-CAPS     — flags if >60% of alphabetic characters are uppercase.
+    3. Missing tag  — flags if text is longer than 80 characters and does not
+                      contain '@thrillmates' (case-insensitive).
+    4. Price check  — flags any dollar amount (e.g. $25) in the text whose
+                      value does not exist in the pricing table.
+    5. Length       — flags if text exceeds 2200 characters (Instagram limit).
+
+    Returns
+    -------
+    dict with:
+        approved (bool)    — True only if no issues were found.
+        issues (list[str]) — Empty list when approved; otherwise one string
+                             per rule violation describing the problem.
+    """
+    issues: list[str] = []
+
+    # 1. Profanity check (small representative wordlist)
+    _PROFANITY = {
+        "fuck", "shit", "bitch", "asshole", "bastard",
+        "cunt", "dick", "piss", "crap", "damn",
+    }
+    words_lower = re.findall(r"[a-z]+", text.lower())
+    found_profanity = _PROFANITY.intersection(words_lower)
+    if found_profanity:
+        issues.append(
+            f"Profanity detected: {', '.join(sorted(found_profanity))}. "
+            "Please remove or replace these words."
+        )
+
+    # 2. ALL-CAPS check (>60% of alpha chars are uppercase)
+    alpha_chars = [c for c in text if c.isalpha()]
+    if alpha_chars:
+        upper_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+        if upper_ratio > 0.60:
+            issues.append(
+                f"Text is {upper_ratio:.0%} uppercase — feels like shouting. "
+                "Use sentence case or title case instead."
+            )
+
+    # 3. Missing @thrillmates tag
+    if len(text) > 80 and "@thrillmates" not in text.lower():
+        issues.append(
+            "Text is longer than 80 characters but does not include '@thrillmates'. "
+            "Every public post must tag the venue handle."
+        )
+
+    # 4. Price accuracy check — any $N or $N.NN in the text must exist in DB
+    price_mentions = re.findall(r"\$(\d+(?:\.\d{1,2})?)", text)
+    if price_mentions:
+        try:
+            conn = _get_connection()
+            try:
+                valid_prices = _get_valid_prices(conn.cursor())
+            finally:
+                conn.close()
+            for p_str in price_mentions:
+                p_val = round(float(p_str), 2)
+                if p_val not in valid_prices:
+                    issues.append(
+                        f"${p_str} does not match any price in the pricing table "
+                        f"(valid prices: {sorted(valid_prices)}). "
+                        "Check the amount or use get_pricing() to verify."
+                    )
+        except Exception as e:
+            issues.append(f"Price check failed (DB error): {e}")
+
+    # 5. Length check
+    if len(text) > 2200:
+        issues.append(
+            f"Text is {len(text)} characters, which exceeds Instagram's 2200-character "
+            "caption limit. Please shorten it."
+        )
+
+    return {"approved": len(issues) == 0, "issues": issues}
 
 
 # ---------------------------------------------------------------------------
