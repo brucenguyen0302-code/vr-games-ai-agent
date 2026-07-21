@@ -20,6 +20,7 @@ mcp_toolset = McpToolset(
             command="python",
             args=[str(mcp_server_path)],
         ),
+        timeout=120.0,
     ),
     tool_filter=[
         "get_attractions",
