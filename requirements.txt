@@ -4,3 +4,4 @@ python-dotenv
 mcp[cli]
 huggingface_hub
 pillow
+gradio
