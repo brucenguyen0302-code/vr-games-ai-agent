@@ -15,28 +15,18 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 mcp_server_path = PROJECT_ROOT / "mcp_server" / "server.py"
 
-# Connect to the local MCP server via stdio and filter tools to just what sales needs.
-mcp_toolset = McpToolset(
-    connection_params=StdioConnectionParams(
-        server_params=StdioServerParameters(
-            command="python",
-            args=[str(mcp_server_path)],
+def create_mcp_toolset(tool_filter: list[str]) -> McpToolset:
+    # We must instantiate a new McpToolset (and thus stdio connection) for each agent
+    return McpToolset(
+        connection_params=StdioConnectionParams(
+            server_params=StdioServerParameters(
+                command="python",
+                args=[str(mcp_server_path)],
+            ),
+            timeout=120.0,
         ),
-        timeout=120.0,
-    ),
-    tool_filter=[
-        "get_attractions",
-        "get_pricing",
-        "check_availability",
-        "create_booking",
-        "get_upcoming_bookings",
-        "log_customer_interaction",
-        "get_instagram_dms",
-        "reply_instagram_dm",
-        "get_instagram_comments",
-        "flag_for_owner_review"
-    ]
-)
+        tool_filter=tool_filter
+    )
 
 INSTRUCTION = """
 You are the sales & customer assistant for Innoviz Crown, a VR venue in Australia. Instagram: @thrillmates. Hours: Wed–Sun 11:00–21:00.
@@ -68,9 +58,25 @@ def build_sales_instruction(context: ReadonlyContext) -> str:
     return _current_date_line() + INSTRUCTION.strip()
 
 
-root_agent = LlmAgent(
-    name="sales_agent",
-    model=os.environ.get("AGENT_MODEL", "gemini-3.1-flash-lite"),
-    instruction=build_sales_instruction,
-    tools=[mcp_toolset]
-)
+def create_sales_agent() -> LlmAgent:
+    return LlmAgent(
+        name="sales_agent",
+        model=os.environ.get("AGENT_MODEL", "gemini-3.1-flash-lite"),
+        instruction=build_sales_instruction,
+        description="Agent for customer bookings, pricing, availability, and Instagram DM/comment handling for Innoviz Crown.",
+        tools=[create_mcp_toolset([
+            "get_attractions",
+            "get_pricing",
+            "check_availability",
+            "create_booking",
+            "get_upcoming_bookings",
+            "log_customer_interaction",
+            "get_instagram_dms",
+            "reply_instagram_dm",
+            "get_instagram_comments",
+            "flag_for_owner_review"
+        ])]
+    )
+
+
+root_agent = create_sales_agent()

@@ -37,13 +37,17 @@ You are the publishing manager for Innoviz Crown (Instagram @thrillmates, hours 
 
 Standard workflow for a new post:
 1. get_brand_guidelines and get_attractions to ground the content.
-2. If an image is needed, delegate to image_agent and use the returned file path.
+2. If an image is needed, call the transfer_to_agent tool with the argument publishing_image_agent, then use the returned file path. Do not attempt to call publishing_image_agent directly — it is an agent, not a tool.
 3. Draft a caption in brand voice, always tagging @thrillmates, never inventing prices — read them from get_attractions.
 4. Run moderate_content on the caption and fix any issues.
 5. Call get_optimal_posting_time to pick a slot, explaining your reasoning.
 6. schedule_post.
 7. request_approval for the scheduled post.
 8. Tell the user the post is awaiting owner approval and give them the post id.
+
+If a video content plan is needed, call the transfer_to_agent tool with the argument publishing_video_agent. Do not attempt to call publishing_video_agent directly — it is an agent, not a tool.
+
+publishing_image_agent and publishing_video_agent are sub-agents, not tools. The only way to hand work to them is the transfer_to_agent tool; never write their names as if invoking a function.
 
 You must NEVER call publish_instagram_post or publish_tiktok_post unless get_approval_status confirms the post is approved. If asked to publish something unapproved, refuse and explain the approval requirement.
 
@@ -74,23 +78,30 @@ def build_publishing_instruction(context: ReadonlyContext) -> str:
     return _current_date_line() + PUBLISHING_AGENT_INSTRUCTION.strip()
 
 
-root_agent = LlmAgent(
-    name="publishing_agent",
-    model=os.environ.get("AGENT_MODEL", "gemini-3.1-flash-lite"),
-    instruction=build_publishing_instruction,
-    description="Agent for planning, scheduling, and publishing approved social posts for Innoviz Crown.",
-    tools=[create_mcp_toolset([
-        "get_optimal_posting_time",
-        "get_brand_guidelines",
-        "get_attractions",
-        "moderate_content",
-        "schedule_post",
-        "get_scheduled_posts",
-        "cancel_scheduled_post",
-        "request_approval",
-        "get_approval_status",
-        "publish_instagram_post",
-        "publish_tiktok_post",
-    ])],
-    sub_agents=[create_image_agent(), create_video_agent()]
-)
+def create_publishing_agent() -> LlmAgent:
+    return LlmAgent(
+        name="publishing_agent",
+        model=os.environ.get("AGENT_MODEL", "gemini-3.1-flash-lite"),
+        instruction=build_publishing_instruction,
+        description="Agent for planning, scheduling, and publishing approved social posts for Innoviz Crown.",
+        tools=[create_mcp_toolset([
+            "get_optimal_posting_time",
+            "get_brand_guidelines",
+            "get_attractions",
+            "moderate_content",
+            "schedule_post",
+            "get_scheduled_posts",
+            "cancel_scheduled_post",
+            "request_approval",
+            "get_approval_status",
+            "publish_instagram_post",
+            "publish_tiktok_post",
+        ])],
+        sub_agents=[
+            create_image_agent(name_prefix="publishing_"),
+            create_video_agent(name_prefix="publishing_"),
+        ]
+    )
+
+
+root_agent = create_publishing_agent()
