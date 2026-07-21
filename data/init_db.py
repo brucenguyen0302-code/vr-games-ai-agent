@@ -34,6 +34,7 @@ def dt(days: int, hour: int, minute: int = 0) -> str:
 # ---------------------------------------------------------------------------
 SCHEMA_SQL = """
 DROP TABLE IF EXISTS customer_interactions;
+DROP TABLE IF EXISTS scheduled_posts;
 DROP TABLE IF EXISTS bookings;
 DROP TABLE IF EXISTS pricing;
 DROP TABLE IF EXISTS attractions;
@@ -80,6 +81,18 @@ CREATE TABLE customer_interactions (
 CREATE TABLE brand (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE scheduled_posts (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform           TEXT    NOT NULL CHECK(platform IN ('instagram', 'tiktok')),
+    caption            TEXT    NOT NULL,
+    image_path         TEXT    NOT NULL,
+    scheduled_datetime TEXT    NOT NULL,  -- ISO 8601
+    status             TEXT    NOT NULL CHECK(status IN ('pending_approval', 'approved', 'published', 'cancelled', 'rejected')),
+    created_at         TEXT    NOT NULL,  -- ISO 8601
+    published_at       TEXT,              -- ISO 8601 (NULL until published)
+    rejection_reason   TEXT               -- NULL unless rejected
 );
 """
 

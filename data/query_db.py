@@ -167,6 +167,7 @@ def main() -> None:
         print_table(conn, "pricing")
         print_table(conn, "bookings")
         print_table(conn, "customer_interactions")
+        print_table(conn, "scheduled_posts")
 
         # Joined / human-readable views
         print_pricing_with_names(conn)
