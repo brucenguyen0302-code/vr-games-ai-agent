@@ -280,10 +280,26 @@ def _decide_approval(approval_id: int, decision: str, note: str) -> str:
         conn.close()
 
 
+def _format_datetime(value: str | None) -> str:
+    """Render an ISO datetime string as 'YYYY-MM-DD HH:MM', dropping microseconds."""
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
+
+
 def refresh_table():
     rows = _fetch_pending_posts()
     display = [
-        [r["approval_id"], r["platform"], r["scheduled_datetime"], r["requested_at"], r["caption"]]
+        [
+            r["approval_id"],
+            r["platform"],
+            _format_datetime(r["scheduled_datetime"]),
+            _format_datetime(r["requested_at"]),
+            r["caption"],
+        ]
         for r in rows
     ]
     return display, rows
@@ -444,8 +460,9 @@ def build_demo() -> gr.Blocks:
             refresh_btn = gr.Button("🔄 Refresh")
             pending_state = gr.State([])
             table = gr.Dataframe(
-                headers=["Approval ID", "Platform", "Scheduled (AEST)", "Requested At", "Caption"],
+                headers=["ID", "Platform", "Scheduled (AEST)", "Requested At", "Caption"],
                 datatype=["number", "str", "str", "str", "str"],
+                column_widths=["70px", "100px", "170px", "170px", "auto"],
                 interactive=False,
                 wrap=True,
                 label="Pending approvals",
