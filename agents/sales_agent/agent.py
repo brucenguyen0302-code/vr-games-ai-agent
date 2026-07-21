@@ -161,6 +161,7 @@ def create_sales_agent() -> LlmAgent:
             "get_instagram_dms",
             "reply_instagram_dm",
             "get_instagram_comments",
+            "get_tiktok_comments",
             "detect_prompt_injection",
             "flag_for_owner_review"
         ])]
