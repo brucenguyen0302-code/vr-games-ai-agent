@@ -33,6 +33,7 @@ def dt(days: int, hour: int, minute: int = 0) -> str:
 # Schema
 # ---------------------------------------------------------------------------
 SCHEMA_SQL = """
+DROP TABLE IF EXISTS auto_flagged_messages;
 DROP TABLE IF EXISTS customer_interactions;
 DROP TABLE IF EXISTS scheduled_posts;
 DROP TABLE IF EXISTS instagram_messages;
@@ -115,6 +116,15 @@ CREATE TABLE approvals (
     decided_at   TEXT,              -- ISO 8601
     decided_by   TEXT,
     note         TEXT
+);
+
+-- Tracks which externally sourced messages/comments have already triggered
+-- an automatic owner_flag (see mcp_server.server._auto_flag_if_suspicious),
+-- so repeated reads of the same suspicious message never double-flag it.
+CREATE TABLE auto_flagged_messages (
+    source     TEXT    NOT NULL CHECK(source IN ('instagram_dm', 'instagram_comment', 'tiktok_comment')),
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY (source, message_id)
 );
 
 CREATE TABLE scheduled_posts (
