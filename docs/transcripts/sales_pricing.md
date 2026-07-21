@@ -1,7 +1,7 @@
 # Scenario: Sales pricing lookup
 
 **Root agent under test:** `sales_agent`
-**Generated:** 2026-07-21T16:23:48+10:00
+**Generated:** 2026-07-21T22:40:31+10:00
 
 A straightforward pricing question. sales_agent should ground the answer in `get_pricing` rather than inventing a number.
 
@@ -31,11 +31,11 @@ A straightforward pricing question. sales_agent should ground the answer in `get
    }
    ```
 3. **`sales_agent`** **final response**:
-   > The 360 Flight is $25 per person, so for 2 people, it would be $50 in total. Would you like me to check availability for a session?
+   > The 360 Flight is $25 per person, so that would be $50 for 2 people! 🚀 Would you like me to check availability for you?
 
 ## Final Response
 
-> The 360 Flight is $25 per person, so for 2 people, it would be $50 in total. Would you like me to check availability for a session?
+> The 360 Flight is $25 per person, so that would be $50 for 2 people! 🚀 Would you like me to check availability for you?
 
 ## Claim Guard
 

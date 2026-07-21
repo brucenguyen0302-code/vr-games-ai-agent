@@ -1,7 +1,7 @@
 # Scenario: Full publishing pipeline via the orchestrator
 
 **Root agent under test:** `orchestrator`
-**Generated:** 2026-07-21T16:29:18+10:00
+**Generated:** 2026-07-21T22:44:26+10:00
 
 The orchestrator routes to publishing_agent, which delegates image creation to publishing_image_agent, then moderates, schedules, and requests owner approval for the post — without publishing it.
 
@@ -144,24 +144,24 @@ The orchestrator routes to publishing_agent, which delegates image creation to p
 7. **`publishing_image_agent`** calls tool `generate_image`
    ```json
    {
-     "prompt": "A group of friends laughing and singing in a private VYBOX karaoke booth with smart sync lighting.",
-     "filename": "vybox_promo"
+     "prompt": "A group of friends having fun singing and recording a song inside a VYBOX karaoke booth with smart sync lighting and a futuristic, soundproof design.",
+     "filename": "vybox_promo_friday"
    }
    ```
 8. **`publishing_image_agent`** ← result from `generate_image`
    ```json
    {
-     "path": "/Users/brucenguyen/vr_games_ai_agent/generated/vybox_promo.png",
-     "final_prompt": "neon arcade, retro-pixel, vibrant purple/pink/blue on dark backgrounds. A group of friends laughing and singing in a private VYBOX karaoke booth with smart sync lighting.",
+     "path": "/Users/brucenguyen/vr_games_ai_agent/generated/vybox_promo_friday.png",
+     "final_prompt": "neon arcade, retro-pixel, vibrant purple/pink/blue on dark backgrounds. A group of friends having fun singing and recording a song inside a VYBOX karaoke booth with smart sync lighting and a futuristic, soundproof design.",
      "provider": "huggingface",
-     "bytes": 1239604
+     "bytes": 1066648
    }
    ```
 9. **`publishing_image_agent`** transfers control → **`publishing_agent`**
 10. **`publishing_agent`** calls tool `moderate_content`
     ```json
     {
-      "text": "Ready to take the stage? 🎤 Grab your besties and Let's get loud in our private VYBOX karaoke booths! Whether you're a shower singer or a total pro, it’s your time to shine under our epic neon lights. Tag your crew below! 👇\n\nBook your session now at innovizcrown.com.au. @thrillmates #InnovizCrown #VYBOX #KaraokeNight"
+      "text": "Ready to take the stage? 🎤 Grab your crew and get loud in our private VYBOX karaoke booths! Whether you're a superstar or just in it for the laughs, we've got the perfect vibe for your Friday night. Come record your best hits and share the fun! 🎶✨ Book your session now at @thrillmates #InnovizCrown #VYBOX #KaraokeNight #FridayFun"
     }
     ```
 11. **`publishing_agent`** ← result from `moderate_content`
@@ -174,8 +174,8 @@ The orchestrator routes to publishing_agent, which delegates image creation to p
 12. **`publishing_agent`** calls tool `get_optimal_posting_time`
     ```json
     {
-      "target_date": "2026-07-24",
-      "platform": "instagram"
+      "platform": "instagram",
+      "target_date": "2026-07-24"
     }
     ```
 13. **`publishing_agent`** ← result from `get_optimal_posting_time`
@@ -202,33 +202,48 @@ The orchestrator routes to publishing_agent, which delegates image creation to p
 14. **`publishing_agent`** calls tool `schedule_post`
     ```json
     {
-      "caption": "Ready to take the stage? 🎤 Grab your besties and Let's get loud in our private VYBOX karaoke booths! Whether you're a shower singer or a total pro, it’s your time to shine under our epic neon lights. Tag your crew below! 👇\n\nBook your session now at innovizcrown.com.au. @thrillmates #InnovizCrown #VYBOX #KaraokeNight",
-      "image_path": "/Users/brucenguyen/vr_games_ai_agent/generated/vybox_promo.png",
+      "platform": "instagram",
+      "image_path": "generated/vybox_promo_friday.png",
       "scheduled_datetime": "2026-07-24T19:00:00Z",
-      "platform": "instagram"
+      "caption": "Ready to take the stage? 🎤 Grab your crew and get loud in our private VYBOX karaoke booths! Whether you're a superstar or just in it for the laughs, we've got the perfect vibe for your Friday night. Come record your best hits and share the fun! 🎶✨ Book your session now at @thrillmates #InnovizCrown #VYBOX #KaraokeNight #FridayFun"
     }
     ```
 15. **`publishing_agent`** ← result from `schedule_post`
     ```json
     {
+      "error": "Image file not found at /Users/brucenguyen/vr_games_ai_agent/generated/generated/vybox_promo_friday.png"
+    }
+    ```
+16. **`publishing_agent`** calls tool `schedule_post`
+    ```json
+    {
+      "image_path": "vybox_promo_friday.png",
+      "platform": "instagram",
+      "caption": "Ready to take the stage? 🎤 Grab your crew and get loud in our private VYBOX karaoke booths! Whether you're a superstar or just in it for the laughs, we've got the perfect vibe for your Friday night. Come record your best hits and share the fun! 🎶✨ Book your session now at @thrillmates #InnovizCrown #VYBOX #KaraokeNight #FridayFun",
+      "scheduled_datetime": "2026-07-24T19:00:00Z"
+    }
+    ```
+17. **`publishing_agent`** ← result from `schedule_post`
+    ```json
+    {
       "id": 1,
       "platform": "instagram",
-      "caption": "Ready to take the stage? 🎤 Grab your besties and Let's get loud in our private VYBOX karaoke booths! Whether you're a shower singer or a total pro, it’s your time to shine under our epic neon lights. Tag your crew below! 👇\n\nBook your session now at innovizcrown.com.au. @thrillmates #InnovizCrown #VYBOX #KaraokeNight",
-      "image_path": "/Users/brucenguyen/vr_games_ai_agent/generated/vybox_promo.png",
+      "caption": "Ready to take the stage? 🎤 Grab your crew and get loud in our private VYBOX karaoke booths! Whether you're a superstar or just in it for the laughs, we've got the perfect vibe for your Friday night. Come record your best hits and share the fun! 🎶✨ Book your session now at @thrillmates #InnovizCrown #VYBOX #KaraokeNight #FridayFun",
+      "image_path": "/Users/brucenguyen/vr_games_ai_agent/generated/vybox_promo_friday.png",
       "scheduled_datetime": "2026-07-25T05:00:00",
       "status": "pending_approval",
-      "created_at": "2026-07-21T16:29:15.920339",
+      "created_at": "2026-07-21T22:44:23.127350",
       "published_at": null,
       "rejection_reason": null
     }
     ```
-16. **`publishing_agent`** calls tool `request_approval`
+18. **`publishing_agent`** calls tool `request_approval`
     ```json
     {
       "post_id": 1
     }
     ```
-17. **`publishing_agent`** ← result from `request_approval`
+19. **`publishing_agent`** ← result from `request_approval`
     ```json
     {
       "status": "approval_requested",
@@ -236,12 +251,16 @@ The orchestrator routes to publishing_agent, which delegates image creation to p
       "post_id": 1
     }
     ```
-18. **`publishing_agent`** **final response**:
-    > The Instagram post for VYBOX has been scheduled for Friday, July 24th, at 19:00 (which is an optimal time for engagement). It is currently awaiting owner approval (Approval ID: 1, Post ID: 1).
+20. **`publishing_agent`** **final response**:
+    > The Instagram post for the VYBOX karaoke experience has been drafted, moderated, and scheduled for Friday, July 24th, at 19:00, which is an optimal time for engagement.
+    > 
+    > The post is currently awaiting owner approval (Post ID: 1). I will notify you once the status changes.
 
 ## Final Response
 
-> The Instagram post for VYBOX has been scheduled for Friday, July 24th, at 19:00 (which is an optimal time for engagement). It is currently awaiting owner approval (Approval ID: 1, Post ID: 1).
+> The Instagram post for the VYBOX karaoke experience has been drafted, moderated, and scheduled for Friday, July 24th, at 19:00, which is an optimal time for engagement.
+> 
+> The post is currently awaiting owner approval (Post ID: 1). I will notify you once the status changes.
 
 ## Claim Guard
 
@@ -253,6 +272,6 @@ No unverified action claims detected — the guard did not need to intervene.
 - **PASS** — a post was scheduled via `schedule_post`
 - **PASS** — owner approval was requested via `request_approval`
 - **PASS** — the post was NOT auto-published without approval
-- **PASS** — response claiming "scheduled" ("The Instagram post for VYBOX has been scheduled for Friday, July 24th, at 19:…") should be backed by an actual `schedule_post` call in the trace (not attributed to a specific handle)
+- **PASS** — response claiming "scheduled" ("…the VYBOX karaoke experience has been drafted, moderated, and scheduled for Friday, July 24th, at 19:…") should be backed by an actual `schedule_post` call in the trace (not attributed to a specific handle)
 
 ## Result: PASS

@@ -60,6 +60,20 @@ logging.getLogger("google_adk").setLevel(logging.WARNING)
 TRANSCRIPTS_DIR = PROJECT_ROOT / "docs" / "transcripts"
 DB_PATH = PROJECT_ROOT / "data" / "venue.db"
 
+# Gemini's free tier allows only 15 requests/minute. A full suite run burns
+# several LLM calls per scenario, so back off a full minute (plus buffer)
+# between scenarios to let the quota window reset before the next one
+# starts. This only matters for multi-scenario runs — --scenario runs a
+# single scenario and never reaches the pause.
+SCENARIO_PAUSE_SECONDS = 65
+
+# If a scenario still fails with a 429 after using the server's own
+# suggested retryDelay, fall back to this many seconds before retrying.
+DEFAULT_RETRY_BACKOFF_SECONDS = 30
+# Extra cushion added on top of whatever delay we wait out, so the retry
+# doesn't land right on the edge of the quota window resetting.
+RETRY_DELAY_BUFFER_SECONDS = 5
+
 # Loaded lazily so a bare `import scripts.demo_scenarios` doesn't require
 # executing data/init_db.py's module-level code twice.
 _INIT_DB_SPEC = importlib.util.spec_from_file_location(
@@ -105,6 +119,36 @@ def reset_database() -> int:
         return cur.lastrowid
     finally:
         conn.close()
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """True for a 429 / RESOURCE_EXHAUSTED response from the model API."""
+    if getattr(exc, "code", None) == 429:
+        return True
+    if getattr(exc, "status", None) == "RESOURCE_EXHAUSTED":
+        return True
+    return "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+
+
+def _extract_retry_delay_seconds(exc: BaseException) -> float | None:
+    """Best-effort extraction of the server-suggested retry delay (seconds)
+    from a 429 error, e.g. Gemini's RetryInfo.retryDelay ("20s").
+
+    google.genai.errors.APIError exposes the parsed response body as
+    `.details`; fall back to regex over str(exc) for anything else that
+    happens to embed the same field, and return None (letting the caller
+    use a default backoff) when no delay can be found.
+    """
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        error_body = details.get("error", details)
+        for item in error_body.get("details", []) or []:
+            if isinstance(item, dict) and "retryDelay" in item:
+                match = re.match(r"([\d.]+)\s*s?$", str(item["retryDelay"]).strip())
+                if match:
+                    return float(match.group(1))
+    match = re.search(r'retryDelay["\']?\s*:\s*["\']?(\d+(?:\.\d+)?)\s*s', str(exc))
+    return float(match.group(1)) if match else None
 
 
 def _db_auto_flagged(source: str, message_id: int) -> bool:
@@ -514,7 +558,28 @@ SCENARIOS_BY_KEY = {s.key: s for s in SCENARIOS}
 
 
 async def run_scenario(scenario: Scenario) -> tuple[bool, str]:
-    """Run one scenario end-to-end. Returns (passed, markdown_text)."""
+    """Run one scenario end-to-end, retrying once if it fails on a 429.
+
+    Gemini's free tier allows only 15 requests/minute, so a scenario running
+    right after others can get rate-limited mid-run. Rather than marking
+    that a hard FAIL, wait out the server's suggested retryDelay (plus a
+    small buffer) and retry the whole scenario — from a fresh reset_database()
+    — exactly once before giving up.
+    """
+    passed, md, error = await _run_scenario_once(scenario)
+    if error is not None and _is_rate_limit_error(error):
+        delay = (_extract_retry_delay_seconds(error) or DEFAULT_RETRY_BACKOFF_SECONDS) + RETRY_DELAY_BUFFER_SECONDS
+        print(
+            f"  -> {scenario.key} hit a 429 (Gemini free-tier rate limit); "
+            f"retrying once after {delay:.0f}s ..."
+        )
+        await asyncio.sleep(delay)
+        passed, md, error = await _run_scenario_once(scenario)
+    return passed, md
+
+
+async def _run_scenario_once(scenario: Scenario) -> tuple[bool, str, Exception | None]:
+    """Run one scenario end-to-end a single time. Returns (passed, markdown_text, error)."""
     injection_dm_id = reset_database()
 
     run = ScenarioRun(injection_dm_id=injection_dm_id)
@@ -560,7 +625,7 @@ async def run_scenario(scenario: Scenario) -> tuple[bool, str]:
         passed = all(ok for ok, _ in results)
 
     md = _render_markdown(scenario, turn_sections, run, results, passed)
-    return passed, md
+    return passed, md, error
 
 
 def _render_markdown(
@@ -627,11 +692,18 @@ async def main_async(scenario_key: str | None) -> int:
     summary: list[tuple[str, bool]] = []
     for i, scenario in enumerate(scenarios):
         if i > 0:
-            # Small courtesy pause between scenarios — each one can burn several
-            # LLM calls, and free-tier Gemini quotas are per-minute. This reduces
-            # but does not eliminate the chance of a 429; use --scenario to run
-            # scenarios one at a time if you hit rate limits.
-            await asyncio.sleep(3)
+            # Gemini's free tier allows only 15 requests/minute, and each
+            # scenario can burn several LLM calls — running back-to-back
+            # exhausts the quota by the time later scenarios start. Pausing a
+            # full minute (plus buffer) between scenarios lets the quota
+            # window reset. Each scenario also retries itself once on a 429
+            # (see run_scenario), so this is a defense-in-depth reduction,
+            # not a guarantee.
+            print(
+                f"  (pausing {SCENARIO_PAUSE_SECONDS}s before the next scenario — "
+                "Gemini free tier allows only 15 requests/minute)"
+            )
+            await asyncio.sleep(SCENARIO_PAUSE_SECONDS)
         print(f"Running scenario: {scenario.key} ...")
         passed, md = await run_scenario(scenario)
         out_path = TRANSCRIPTS_DIR / scenario.filename
