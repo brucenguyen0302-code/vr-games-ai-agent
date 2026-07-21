@@ -1,8 +1,10 @@
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
 from google.adk.agents import LlmAgent
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from mcp import StdioServerParameters
@@ -46,9 +48,29 @@ Upsell naturally when relevant: groups → VYBOX booths or multiple rides; coupl
 ESCALATE via flag_for_owner_review (and tell the customer the owner will follow up): refund requests, injuries/safety issues, media/partnership enquiries, legal threats, anything you're unsure about. Never promise refunds or discounts yourself.
 """
 
+# Venue timezone (AEST, UTC+10 — matches mcp_server.py's fixed-offset convention).
+_VENUE_TZ = timezone(timedelta(hours=10))
+
+
+def _current_date_line() -> str:
+    now = datetime.now(_VENUE_TZ)
+    return (
+        f"Today is {now.strftime('%Y-%m-%d')} ({now.strftime('%A')}), "
+        "Australia/Sydney timezone. Always compute relative dates like "
+        "'this Saturday' or 'tomorrow' from this date when checking "
+        "availability or creating bookings.\n\n"
+    )
+
+
+def build_sales_instruction(context: ReadonlyContext) -> str:
+    # Evaluated per-request via ADK's InstructionProvider, so the date is
+    # always fresh rather than frozen at module import time.
+    return _current_date_line() + INSTRUCTION.strip()
+
+
 root_agent = LlmAgent(
     name="sales_agent",
     model=os.environ.get("AGENT_MODEL", "gemini-3.1-flash-lite"),
-    instruction=INSTRUCTION.strip(),
+    instruction=build_sales_instruction,
     tools=[mcp_toolset]
 )

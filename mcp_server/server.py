@@ -1303,12 +1303,27 @@ def schedule_post(platform: str, caption: str, image_path: str, scheduled_dateti
     # Validate ISO datetime in the future
     dt = _parse_iso(scheduled_datetime)
     if not dt:
-        return {"error": "Invalid scheduled_datetime format. Must be ISO 8601."}
-    
+        return {
+            "error": (
+                f"Invalid scheduled_datetime format: '{scheduled_datetime}'. "
+                "Use 'YYYY-MM-DDTHH:MM:SS' or 'YYYY-MM-DDTHH:MM' "
+                "(e.g. '2026-07-25T14:00:00'), interpreted in the venue's "
+                "timezone (Australia/Sydney, AEST, UTC+10). A UTC offset "
+                "may also be supplied, e.g. '2026-07-25T04:00:00+00:00'."
+            )
+        }
+
     # Local now for AEST
     now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=10))).replace(tzinfo=None)
     if dt <= now:
-        return {"error": "scheduled_datetime must be in the future."}
+        return {
+            "error": (
+                f"scheduled_datetime '{dt.isoformat()}' must be in the future. "
+                f"Current venue time (Australia/Sydney, AEST, UTC+10) is "
+                f"{now.isoformat()}. Use format 'YYYY-MM-DDTHH:MM:SS' "
+                f"(e.g. '{(now + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}')."
+            )
+        }
 
     # Verify image exists in generated/
     img_path = Path(image_path)
